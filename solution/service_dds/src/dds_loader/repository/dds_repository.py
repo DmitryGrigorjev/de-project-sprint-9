@@ -1,11 +1,279 @@
-import uuid
 from datetime import datetime
-from typing import Any, Dict, List
-
+from typing import Dict
 from lib.pg import PgConnect
-from pydantic import BaseModel
+from lib.redis import RedisClient
+from app_config import AppConfig
+
+# сначала заберем в словарь весь редис что есть (и подписчики и рестораны там лежат в куче)
+class ReadFromRedis:
+    def __init__(self, redis: RedisClient) -> Dict:
+        self._redis = redis
+		for k in self._redis.keys():
+			self._redis = json.loads(k)
+			data = append(self._redis)		
+		return data
+
+#затем заберем из stg слоя в postgre информацию о заказах и продуктах
+class ReadFromPostgre:
+    def __init__(self, db: PgConnect) -> Dict:
+		self._db = db
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute("""
+							SELECT object_id, payload 
+							FROM stg.order_events
+							""",
+				)	
+			data=cur.fetchall()
+			
+ 		return data
+
+class WriteFromRedis:
+    def __init__(self, db: PgConnect, redis: RedisClient) -> None:        
+		self._db = db
+		self._data = ReadFromRedis(redis)
+	#в h_category просто вставляем строку
+    def h_category(self, category_name: str) -> None:
+        with self._db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+							INSERT INTO dds.h_category
+							(category_name, load_src)
+							VALUES (%(category_name)s, 'redis')
+							""",
+							{
+								'category_name': category_name,
+							}
+                )
+	#в h_usrer вставляем id
+	def h_user_insert(self, user_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.h_user
+						(user_id, load_src)
+						VALUES (%(user_id)s, 'redis')
+						""",
+						{
+							'user_id': user_id,
+						}
+			)
+	#в s_user_names - логин и имя			
+	def s_user_names_insert(self, user_id: str, username: str, userlogin:str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.s_user_names
+						(h_user_pk, username, userlogin, load_src)
+						VALUES (%(user_id)s, %(username)s, %(userlogin)s, 'redis')
+						""",
+						{
+							'user_id': user_id,
+							'username': username,
+							'userlogin': userlogin,
+						}
+			)
+	#в h_restaurant также только id
+	def h_restaurant_insert(self, restaurant_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.h_restaurant
+						(restaurant_id, load_src)
+						VALUES (%(restaurant_id)s, 'redis')
+						""",
+						{
+							'restaurant_id': restaurant_id,
+						}
+			)
+	#и в s_restaurant_names			
+	def s_restaurant_names_insert(self, restaurant_id: str, name: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.s_restaurant_names
+						(h_restaurant_pk, name, load_src)
+						VALUES (%(restaurant_id)s, %(name)s, 'redis')
+						""",
+						{
+							'restaurant_id': restaurant_id,
+							'name': name,
+						}
+			)
+	#еще надо заполнить h_product			
+	def h_product_insert(self, product_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.h_product
+						(product_id, load_src)
+						VALUES (%(product_id)s, 'redis')
+						""",
+						{
+							'product_id': product_id,
+						}
+			)
+	#и s_product_names
+	def s_product_names_insert(self, product_id: str, name: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.s_product_names
+						(h_product_pk, name, load_src)
+						VALUES (%(product_id)s, %(name)s, 'redis')
+						""",
+						{
+							'product_id': product_id,
+							'name': name,
+						}
+			)	
+	#для поиска тех категорий, которые уже есть в h_category чтобы не задвоились записи при вставке
+	# в данной итерации, для последующих вставок данные должны сохраняться для целостности, отфильтровать можно будет по дате
+	def h_category_select(self, category_name: str) -> str:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+				cur.execute("""
+							SELECT category_name 
+							FROM dds.h_category
+							WHERE category_name = %(category_name)s
+							""",
+							{
+								'category_name': category_name
+							}
+				)	
+			category=cur.fetchall()
+ 			return category
+			
+	#теперь заполнение таблиц линков product_category и product_restaurant			
+	def l_product_category_insert(self, product_id: str, category_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.l_product_category
+						(h_product_pk, h_category_pk, load_src)
+						VALUES (%(product_id)s,(%(category_id)s, 'redis')
+						""",
+						{
+							'product_id': product_id,
+							'category_id': category_id,
+						}
+			)
+	def l_product_restaurant_insert(self, product_id: str, restaurant_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.l_product_restaurant
+						(h_product_pk, h_restaurant_pk, load_src)
+						VALUES (%(product_id)s,(%(restaurant_id)s, 'redis')
+						""",
+						{
+							'product_id': product_id,
+							'restaurant_id': restaurant_id,
+						}
+			)
+	#загружаем что получили из редиса
+	for rows in self._data():
+		#если запись из редиса - про меню и в нем есть категория
+		menu = rows['menu'] 
+		if menu:
+			self.h_restaurant_insert(rows['_id'])
+			self.s_restaurant_names_insert(rows['_id'],rows['name'])
+			self.h_product_insert(menu['_id'])
+			self.s_product_names_insert(menu['_id'],menu['name'])
+			self.l_product_restaurant_insert(menu['_id'],rows['_id'])
+			#схема данных недоработана, т.к. в redis нет поля id категории с uuid, это недоработка курса. предположим что оно есть :)
+			self.l_product_category_insert(menu['_id'],menu['category_id'])
+			#чтобы не дублировалось
+			if not h_category_select(menu['category']):
+				self.h_category_insert(menu['category'])
+		else:
+			self.s_user_names_insert(rows['_id'], rows['name'], rows['login'])
+			self.h_user_insert(rows['_id'])
+			
+
+class WriteFromPostgre:
+    def __init__(self, db: PgConnect, db_dds: PgConnect) -> None:  
+		self._data_postgre = ReadFromPostgre(db)      
+		self._db = db_dds
+	#заполнение h_order			
+	def h_order_insert(self, order_id: str, order_dt: datetime) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.h_order
+						(order_id, order_dt, load_src)
+						VALUES (%(order_id)s,%(order_dt)s,'postgre')
+						""",
+						{
+							'order_id': order_id,
+							'order_dt': order_dt,
+						}
+			)
+	#заполнение сателлитов order			
+	def s_order_status_insert(self, order_id: str, status: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.s_order_status
+						(order_id, status, load_src)
+						VALUES (%(order_id)s,%(status)s,'postgre')
+						""",
+						{
+							'order_id': order_id,
+							'status': status,
+						}
+			)
+	def s_order_cost(self, order_id: str, cost: float, payment: float) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.s_order_cost
+						(order_id, cost, payment, load_src)
+						VALUES (%(order_id)s,%(cost)s,%(payment)s,'postgre')
+						""",
+						{
+							'order_id': order_id,
+							'cost': cost,
+							'payment': payment,
+						}
+			)
+	#и таблицы линки
+	def l_order_user_insert(self, order_id: str, user_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.l_order_user
+						(h_order_pk, h_user_pk, load_src)
+						VALUES (%(order_id)s,(%(user_id)s, 'postgre')
+						""",
+						{
+							'order_id': order_id,
+							'user_id': user_id,
+						}
+			)
+	def l_order_product_insert(self, product_id: str, order_id: str) -> None:
+		with self._db.connection() as conn:
+			with conn.cursor() as cur:
+			cur.execute("""
+						INSERT INTO dds.l_order_product
+						(h_product_pk, h_order_pk, load_src)
+						VALUES (%(product_id)s,(%(order_id)s, 'postgre')
+						""",
+						{
+							'product_id': product_id,
+							'order_id': order_id,
+						}
+			)
+	#загружаем что получили из postgre
+	#здесь данные одинаковые, не как в редисе, и косяка с category_id нет,
+	#поэтому проверять на дубликаты и пр не нужно
+	for rows in self._data_postgre():
+			self.h_order_insert(rows['object_id'])
+			self.s_order_status_insert(rows['object_id'],rows['payload']['statuses']['final_staus'])
+			self.s_order_cost(rows['object_id'],rows['payload']['cost'],rows['payload']['payment'])
+			self.l_order_user_insert(rows['object_id'],rows['payload']['user'])
+			self.l_order_product_insert(rows['object_id'],rows['payload']['order_items']['id'])
+			
+	#DDS слой заполнен, хотя я бы немного скорректировал sql ddl для этого слоя в спринте
 
 
-class DdsRepository:
-    def __init__(self, db: PgConnect) -> None:
-        self._db = db

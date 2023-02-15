@@ -1,5 +1,4 @@
 APScheduler
-confluent_kafka
 flask
 psycopg
 psycopg-binary
