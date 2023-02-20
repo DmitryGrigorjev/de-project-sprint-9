@@ -63,6 +63,7 @@ class PgConnect:
         self.sslmode = sslmode      
 		self._db = db
 		self._data = data
+		
 	#очистка первой витрины
 	def UserCategoriesDelete(self) -> None:
 			self._db = db
@@ -73,14 +74,12 @@ class PgConnect:
 								""",
 					)
 
-	#вставка в первую витрину
-	def UserCategoriesWrite(self) -> None:
+	#чтение данных для первой витрины
+	def UserCategoriesRead(self) -> Dict:
 			self._db = db
 			with self._db.connection() as conn:
 				with conn.cursor() as cur:
 					cur.execute("""
-								insert into cdm.user_category_counters
-									(user_id, category_id, category_name, order_cnt)
 								select
 									hu.user_id,
 									hc.h_category_pk,
@@ -98,6 +97,27 @@ class PgConnect:
 									hc.category_name
 								""",
 					)	
+					data=cur.fetchall()			
+			return data
+			
+	#вставка в первую витрину
+	def UserCategoriesWrite(self, user_id: int, category_id: int, category_name: str, order_cnt: int) -> None:
+			self._db = db
+			with self._db.connection() as conn:
+				with conn.cursor() as cur:
+					cur.execute("""
+								insert into cdm.user_category_counters
+									(user_id, category_id, category_name, order_cnt)
+								values (%(user_id)s, %(category_id)s, %(category_name)s, %(order_cnt)s)
+								""",
+								{
+								'user_id' = user_id, 
+								'category_id' = category_id, 
+								'category_name' = category_name, 
+								'order_cnt' = order_cnt
+								}
+					)	
+                )
 					
 	#очистка второй витрины
 	def UserProductsDelete(self) -> None:
@@ -109,14 +129,12 @@ class PgConnect:
 								""",
 					)
 
-	#вставка во вторую витрину
-	def UserProductsWrite(self) -> None:
+	#чтение данных для второй витрины
+	def UserProductsRead(self) -> None:
 			self._db = db
 			with self._db.connection() as conn:
 				with conn.cursor() as cur:
 					cur.execute("""
-								insert into cdm.user_product_counters
-									(user_id, product_id, product_name, order_cnt)
 								select
 									hu.user_id,
 									hp.product_id,
@@ -138,7 +156,27 @@ class PgConnect:
 									spn.`name`
 								""",
 					)
-				
+					data=cur.fetchall()			
+			return data
+			
+	#вставка во вторую витрину			
+	def UserProductsWrite(self, user_id: int, product_id: int, product_name: str, order_cnt: int) -> None:
+			self._db = db
+			with self._db.connection() as conn:
+				with conn.cursor() as cur:
+					cur.execute("""
+								insert into cdm.user_product_counters
+									(user_id, product_id, product_name, order_cnt)
+								values (%(user_id)s, %(product_id)s, %(product_name)s, %(order_cnt)s)
+								""",
+								{
+								'user_id' = user_id, 
+								'product_id' = product_id, 
+								'product_name' = product_name, 
+								'order_cnt' = order_cnt
+								}
+					)	
+                )
 	#CDM слой заполнен
 
 

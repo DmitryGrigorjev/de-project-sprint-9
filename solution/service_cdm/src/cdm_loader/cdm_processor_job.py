@@ -27,14 +27,71 @@ class CdmProcessor:
     def run(self) -> None:
         # Пишем в лог, что джоб был запущен.
         self._logger.info(f"{datetime.utcnow()}: START")
-		self._logger.info(f"{datetime.utcnow()}: Deleting UserCategories DM")        
-        self._cdm_repository.UserCategoriesDelete(self._pg_connect) 
-		self._logger.info(f"{datetime.utcnow()}: Inserting UserCategories DM")  
-        self._cdm_repository.UserCategoriesWrite(self._pg_connect) 
-		self._logger.info(f"{datetime.utcnow()}: Deleting UserProducts DM")  
+
+		#считаем данные для первой
+		CATS_fromDDS = self._cdm_repository.PgConnect(AppConfig.pg_warehouse_host,
+															AppConfig.pg_warehouse_port,
+															AppConfig.pg_warehouse_dbname,
+															AppConfig.pg_warehouse_user,
+															AppConfig.pg_warehouse_password)
+		postgre_data = CATS_fromDDS.UserCategoriesRead()				
+		#и направляем в топик cdm-service-orders
+		CATS_toKafka = self._cdm_repository.KafkaProducer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																AppConfig.CERTIFICATE_PATH)
+		CATS_toKafka.produce(postgre_data)
+		#заберем данные из топика cdm-service-orders
+		CATS_fromKafka = self._cdm_repository.KafkaConsumer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																'test_group',
+																AppConfig.CERTIFICATE_PATH)
+		cats_data = CATS_fromKafka.consume()		
+		
+		#очистим первую витрину
+        self._cdm_repository.UserCategoriesDelete(self._pg_connect) 	
+		
+		#и запишем ее по новой
+		for rows in cats_data._data():
+			cats_data.UserCategoriesWrite(rows['user_id'],rows['category_id'],rows['category_name'],rows['order_cnt'])
+
+		#считаем данные для второй витрины
+		PRODS_fromDDS = self._cdm_repository.PgConnect(AppConfig.pg_warehouse_host,
+															AppConfig.pg_warehouse_port,
+															AppConfig.pg_warehouse_dbname,
+															AppConfig.pg_warehouse_user,
+															AppConfig.pg_warehouse_password)
+		postgre_data = PRODS_fromDDS.UserProductsRead()				
+		#и направляем в топик cdm-service-orders
+		PRODS_toKafka = self._cdm_repository.KafkaProducer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																AppConfig.CERTIFICATE_PATH)
+		PRODS_toKafka.produce(postgre_data)
+		#заберем данные из топика cdm-service-orders
+		PRODS_fromKafka = self._cdm_repository.KafkaConsumer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																'test_group',
+																AppConfig.CERTIFICATE_PATH)
+		prods_data = PRODS_fromKafka.consume()	
+		 
+		#очистим вторую витрину
         self._cdm_repository.UserProductsDelete(self._pg_connect) 
-		self._logger.info(f"{datetime.utcnow()}: Deleting UserProducts DM")  
-        self._cdm_repository.UserProductsWrite(self._pg_connect)
+		
+		#и запишем первую витрину
+		for rows in prods_data._data():
+			prods_data.UserProductsWrite(rows['user_id'],rows['product_id'],rows['product_name'],rows['order_cnt'])
+			
         # Пишем в лог, что джоб успешно завершен.
         self._logger.info(f"{datetime.utcnow()}: FINISH")
 

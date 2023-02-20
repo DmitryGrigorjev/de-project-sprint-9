@@ -34,62 +34,31 @@ class DdsProcessor:
         # Пишем в лог, что джоб был запущен.
         self._logger.info(f"{datetime.utcnow()}: START")	
 		
+		##STG -> DDS Redis
 		# сначала заберем в словарь весь редис что есть (и подписчики и рестораны там лежат в куче)
-		RedisClientSTG = self._dds_repository.RedisClient(AppConfig.redis_host, 
+		RedisClient = self._dds_repository.RedisClient(AppConfig.redis_host, 
 															AppConfig.redis_port, 
 															AppConfig.redis_password, 
 															AppConfig.CERTIFICATE_PATH)
-		redis_data = RedisClientSTG.get()		
-		# отправим в топик stg-service-orders
+		redis_data = RedisClient.get()		
+		# отправим в топик dds-service-orders
 		R_toKafka = self._dds_repository.KafkaProducer(AppConfig.kafka_host, 
 																AppConfig.kafka_port, 
 																AppConfig.kafka_producer_user,
 																AppConfig.kafka_producer_password,
-																'stg-service-orders',
-																AppConfig.CERTIFICATE_PATH)
-		R_toKafka.produce(redis_data);			
-		#забираем данные из stg слоя в postgre
-		PG_fromSTG = self._dds_repository.PgConnect(AppConfig.pg_warehouse_host,
-															AppConfig.pg_warehouse_port,
-															AppConfig.pg_warehouse_dbname,
-															AppConfig.pg_warehouse_user,
-															AppConfig.pg_warehouse_password)
-		postgre_data = PG_fromSTG.get()				
-		#и направляем в топик dds-service-orders
-		PGSTG_toKafka = self._dds_repository.KafkaProducer(AppConfig.kafka_host, 
-																AppConfig.kafka_port, 
-																AppConfig.kafka_producer_user,
-																AppConfig.kafka_producer_password,
 																'dds-service-orders',
 																AppConfig.CERTIFICATE_PATH)
-		PGSTG_toKafka.produce(postgre_data)
-		# заберем данные из топика stg-service-orders
+		R_toKafka.produce(redis_data);	
+		# заберем данные из топика dds-service-orders
 		R_fromKafka = self._dds_repository.KafkaConsumer(AppConfig.kafka_host, 
 																AppConfig.kafka_port, 
 																AppConfig.kafka_producer_user,
 																AppConfig.kafka_producer_password,
-																'stg-service-orders',
-																'test_group',
-																AppConfig.CERTIFICATE_PATH)
-		redis_data = R_fromKafka.consume()				
-		# заберем данные из топика dds-service-orders
-		PG_fromKafka = self._dds_repository.KafkaConsumer(AppConfig.kafka_host, 
-																AppConfig.kafka_port, 
-																AppConfig.kafka_producer_user,
-																AppConfig.kafka_producer_password,
 																'dds-service-orders',
 																'test_group',
 																AppConfig.CERTIFICATE_PATH)
-		postgre_data = PG_fromKafka.consume()			
-
-		# и запишем их в dds слой
-		R_toDDS = self._dds_repository.PgConnect(AppConfig.pg_warehouse_host,
-													AppConfig.pg_warehouse_port,
-													AppConfig.pg_warehouse_dbname,
-													AppConfig.pg_warehouse_user,
-													AppConfig.pg_warehouse_password,
-													redis_data)
-
+		postgre_data = R_fromKafka.consume()	
+		#и запишем в DDS
 		for rows in R_toDDS._data():
 			#если запись из редиса - про меню и в нем есть категория
 			menu = rows['menu'] 
@@ -108,9 +77,43 @@ class DdsProcessor:
 				R_toDDS.s_user_names_insert(rows['_id'], rows['name'], rows['login'])
 				R_toDDS.h_user_insert(rows['_id'])
 		
+		#забираем данные из stg слоя в postgre
+		PG_fromSTG = self._dds_repository.PgConnect(AppConfig.pg_warehouse_host,
+															AppConfig.pg_warehouse_port,
+															AppConfig.pg_warehouse_dbname,
+															AppConfig.pg_warehouse_user,
+															AppConfig.pg_warehouse_password)
+		postgre_data = PG_fromSTG.get()				
+		#и направляем в топик dds-service-orders
+		PGSTG_toKafka = self._dds_repository.KafkaProducer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'dds-service-orders',
+																AppConfig.CERTIFICATE_PATH)
+		PGSTG_toKafka.produce(postgre_data)
+
+		# заберем данные из топика dds-service-orders
+		PG_fromKafka = self._dds_repository.KafkaConsumer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'dds-service-orders',
+																'test_group',
+																AppConfig.CERTIFICATE_PATH)
+		postgre_data = PG_fromKafka.consume()			
+
+		# и запишем их в dds слой
+		R_toDDS = self._dds_repository.PgConnect(AppConfig.pg_warehouse_host,
+													AppConfig.pg_warehouse_port,
+													AppConfig.pg_warehouse_dbname,
+													AppConfig.pg_warehouse_user,
+													AppConfig.pg_warehouse_password,
+													redis_data)
+
+
+		
 		#загружаем что получили из postgre
-		#здесь данные одинаковые, не как в редисе, и косяка с category_id нет,
-		#поэтому проверять на дубликаты и пр не нужно
 		PG_toDDS = self._dds_repository.PgConnect(AppConfig.pg_warehouse_host,
 															AppConfig.pg_warehouse_port,
 															AppConfig.pg_warehouse_dbname,
