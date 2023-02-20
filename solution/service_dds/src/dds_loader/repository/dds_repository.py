@@ -4,19 +4,83 @@ from lib.pg import PgConnect
 from lib.redis import RedisClient
 from app_config import AppConfig
 
-# сначала заберем в словарь весь редис что есть (и подписчики и рестораны там лежат в куче)
-class ReadFromRedis:
-    def __init__(self, redis: RedisClient) -> Dict:
-        self._redis = redis
-		for k in self._redis.keys():
-			self._redis = json.loads(k)
-			data = append(self._redis)		
-		return data
+#классы для чтения и записи в/из Kafka
+class KafkaProducer:
+    def __init__(self, host: str, port: int, user: str, password: str, topic: str, cert_path: str) -> None:
+        params = {
+            'bootstrap.servers': f'{host}:{port}',
+            'security.protocol': 'SASL_SSL',
+            'ssl.ca.location': cert_path,
+            'sasl.mechanism': 'SCRAM-SHA-512',
+            'sasl.username': user,
+            'sasl.password': password,
+            'error_cb': error_callback,
+        }
 
-#затем заберем из stg слоя в postgre информацию о заказах и продуктах
-class ReadFromPostgre:
-    def __init__(self, db: PgConnect) -> Dict:
+        self.topic = topic
+        self.p = Producer(params)
+
+    def produce(self, payload: Dict) -> None:
+        self.p.produce(self.topic, json.dumps(payload))
+        self.p.flush(10)
+		
+class KafkaConsumer:
+    def __init__(self,host: str,port: int,user: str,password: str,topic: str,group: str,cert_path: str) -> None:
+        params = {
+            'bootstrap.servers': f'{host}:{port}',
+            'security.protocol': 'SASL_SSL',
+          #  'ssl.ca.location': cert_path,
+            'sasl.mechanism': 'SCRAM-SHA-512',
+            'sasl.username': user,
+            'sasl.password': password,
+            'group.id': group,  # '',
+            'auto.offset.reset': 'earliest',
+            'enable.auto.commit': False,
+          #  'error_cb': error_callback,
+            'debug': 'all',
+            'client.id': 'someclientkey'
+        }
+
+        self.topic = topic
+        self.c = Consumer(params)
+        self.c.subscribe([topic])
+
+    def consume(self, timeout: float = 3.0) -> Optional[Dict]:        
+        msg = self.c.poll(timeout=3.0)
+        if not msg:
+            return None
+        if msg.error():
+            raise Exception(msg.error())
+        val = msg.value().decode()
+        return json.loads(val)
+
+class RedisClient:
+    def __init__(self, host: str, port: int, password: str, cert_path: str) -> None:
+        self._client = redis.StrictRedis(	
+											host=host,
+											port=port,
+											password=password,
+											ssl=True,
+											ssl_ca_certs=cert_path
+										)
+	def get(self) -> Dict:
+		for k in self._client.keys():
+			str = self._client.get(k)  # type: ignore
+			data = append(json.loads(str))		
+		return data
+		
+class PgConnect:
+    def __init__(self, host: str, port: int, db_name: str, user: str, pw: str, sslmode: str = "require", data: Dict) -> None:
+        self.host = host
+        self.port = port
+        self.db_name = db_name
+        self.user = user
+        self.pw = pw
+        self.sslmode = sslmode      
 		self._db = db
+		self._data = data
+	#для чтения из STG слоя postgre
+	def get(self)->Dict:
 		with self._db.connection() as conn:
 			with conn.cursor() as cur:
 				cur.execute("""
@@ -24,14 +88,8 @@ class ReadFromPostgre:
 							FROM stg.order_events
 							""",
 				)	
-			data=cur.fetchall()
-			
+			data=cur.fetchall()			
  		return data
-
-class WriteFromRedis:
-    def __init__(self, db: PgConnect, redis: RedisClient) -> None:        
-		self._db = db
-		self._data = ReadFromRedis(redis)
 	#в h_category просто вставляем строку
     def h_category(self, category_name: str) -> None:
         with self._db.connection() as conn:
@@ -171,30 +229,7 @@ class WriteFromRedis:
 							'restaurant_id': restaurant_id,
 						}
 			)
-	#загружаем что получили из редиса
-	for rows in self._data():
-		#если запись из редиса - про меню и в нем есть категория
-		menu = rows['menu'] 
-		if menu:
-			self.h_restaurant_insert(rows['_id'])
-			self.s_restaurant_names_insert(rows['_id'],rows['name'])
-			self.h_product_insert(menu['_id'])
-			self.s_product_names_insert(menu['_id'],menu['name'])
-			self.l_product_restaurant_insert(menu['_id'],rows['_id'])
-			#схема данных недоработана, т.к. в redis нет поля id категории с uuid, это недоработка курса. предположим что оно есть :)
-			self.l_product_category_insert(menu['_id'],menu['category_id'])
-			#чтобы не дублировалось
-			if not h_category_select(menu['category']):
-				self.h_category_insert(menu['category'])
-		else:
-			self.s_user_names_insert(rows['_id'], rows['name'], rows['login'])
-			self.h_user_insert(rows['_id'])
-			
 
-class WriteFromPostgre:
-    def __init__(self, db: PgConnect, db_dds: PgConnect) -> None:  
-		self._data_postgre = ReadFromPostgre(db)      
-		self._db = db_dds
 	#заполнение h_order			
 	def h_order_insert(self, order_id: str, order_dt: datetime) -> None:
 		with self._db.connection() as conn:
@@ -264,16 +299,6 @@ class WriteFromPostgre:
 							'order_id': order_id,
 						}
 			)
-	#загружаем что получили из postgre
-	#здесь данные одинаковые, не как в редисе, и косяка с category_id нет,
-	#поэтому проверять на дубликаты и пр не нужно
-	for rows in self._data_postgre():
-			self.h_order_insert(rows['object_id'])
-			self.s_order_status_insert(rows['object_id'],rows['payload']['statuses']['final_staus'])
-			self.s_order_cost(rows['object_id'],rows['payload']['cost'],rows['payload']['payment'])
-			self.l_order_user_insert(rows['object_id'],rows['payload']['user'])
-			self.l_order_product_insert(rows['object_id'],rows['payload']['order_items']['id'])
-			
-	#DDS слой заполнен, хотя я бы немного скорректировал sql ddl для этого слоя в спринте
+
 
 
