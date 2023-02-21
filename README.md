@@ -38,3 +38,7 @@
    
 2. аналогично - cr.yandex/crp1ihf9a8emk9sn50du/cdm_service:v2023-02-20-r3
 
+######### Перенес чтение данных в DDS слой и направил их в топик cdm-service-orders :)
+cr.yandex/crp1ihf9a8emk9sn50du/dds_service:v2023-02-21-r4
+cr.yandex/crp1ihf9a8emk9sn50du/cdm_service:v2023-02-21-r4
+

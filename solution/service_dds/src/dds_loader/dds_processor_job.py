@@ -126,6 +126,39 @@ class DdsProcessor:
 			PG_toDDS.s_order_cost(rows['object_id'],rows['payload']['cost'],rows['payload']['payment'])
 			PG_toDDS.l_order_user_insert(rows['object_id'],rows['payload']['user'])
 			PG_toDDS.l_order_product_insert(rows['object_id'],rows['payload']['order_items']['id'])
+			
+		#сразу считываем данные из DDS
+		#данные для первой витрины
+		CATS_fromDDS = self._cdm_repository.PgConnect(AppConfig.pg_warehouse_host,
+															AppConfig.pg_warehouse_port,
+															AppConfig.pg_warehouse_dbname,
+															AppConfig.pg_warehouse_user,
+															AppConfig.pg_warehouse_password)
+		postgre_data = CATS_fromDDS.UserCategoriesRead()				
+		#и направляем в топик cdm-service-orders
+		CATS_toKafka = self._cdm_repository.KafkaProducer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																AppConfig.CERTIFICATE_PATH)
+		CATS_toKafka.produce(postgre_data)		
+		
+		#считаем данные для второй витрины
+		PRODS_fromDDS = self._cdm_repository.PgConnect(AppConfig.pg_warehouse_host,
+															AppConfig.pg_warehouse_port,
+															AppConfig.pg_warehouse_dbname,
+															AppConfig.pg_warehouse_user,
+															AppConfig.pg_warehouse_password)
+		postgre_data = PRODS_fromDDS.UserProductsRead()				
+		#и направляем в топик cdm-service-orders
+		PRODS_toKafka = self._cdm_repository.KafkaProducer(AppConfig.kafka_host, 
+																AppConfig.kafka_port, 
+																AppConfig.kafka_producer_user,
+																AppConfig.kafka_producer_password,
+																'cdm-service-orders',
+																AppConfig.CERTIFICATE_PATH)
+		PRODS_toKafka.produce(postgre_data)
 
         # Пишем в лог, что джоб успешно завершен.
         self._logger.info(f"{datetime.utcnow()}: FINISH")

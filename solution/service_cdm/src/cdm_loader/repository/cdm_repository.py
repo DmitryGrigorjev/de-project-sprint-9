@@ -3,25 +3,7 @@ from typing import Dict
 from lib.pg import PgConnect
 from app_config import AppConfig
 
-#классы для чтения и записи в/из Kafka
-class KafkaProducer:
-    def __init__(self, host: str, port: int, user: str, password: str, topic: str, cert_path: str) -> None:
-        params = {
-            'bootstrap.servers': f'{host}:{port}',
-            'security.protocol': 'SASL_SSL',
-            'ssl.ca.location': cert_path,
-            'sasl.mechanism': 'SCRAM-SHA-512',
-            'sasl.username': user,
-            'sasl.password': password,
-            'error_cb': error_callback,
-        }
-
-        self.topic = topic
-        self.p = Producer(params)
-
-    def produce(self, payload: Dict) -> None:
-        self.p.produce(self.topic, json.dumps(payload))
-        self.p.flush(10)
+#классы для чтения из Kafka
 		
 class KafkaConsumer:
     def __init__(self,host: str,port: int,user: str,password: str,topic: str,group: str,cert_path: str) -> None:
@@ -73,32 +55,6 @@ class PgConnect:
 								delete from cdm.user_category_counters
 								""",
 					)
-
-	#чтение данных для первой витрины
-	def UserCategoriesRead(self) -> Dict:
-			self._db = db
-			with self._db.connection() as conn:
-				with conn.cursor() as cur:
-					cur.execute("""
-								select
-									hu.user_id,
-									hc.h_category_pk,
-									hc.category_name,
-									count(*)as cnt
-								from
-									dds.h_user hu
-								join dds.l_order_user lou on hu.h_user_pk = lou.h_user_pk
-								join dds.l_order_product lop on	lou.h_order_pk = lop.h_order_pk
-								join dds.l_product_category lpc on lpc.h_product_pk = lop.h_product_pk
-								join dds.h_category hc on lpc.h_category_pk = hc.h_category_pk
-								group by 
-									hu.user_id,
-									hc.h_category_pk,
-									hc.category_name
-								""",
-					)	
-					data=cur.fetchall()			
-			return data
 			
 	#вставка в первую витрину
 	def UserCategoriesWrite(self, user_id: int, category_id: int, category_name: str, order_cnt: int) -> None:
@@ -128,37 +84,7 @@ class PgConnect:
 								delete from cdm.user_product_counters
 								""",
 					)
-
-	#чтение данных для второй витрины
-	def UserProductsRead(self) -> None:
-			self._db = db
-			with self._db.connection() as conn:
-				with conn.cursor() as cur:
-					cur.execute("""
-								select
-									hu.user_id,
-									hp.product_id,
-									spn.`name` as product_name,
-									count(*)as cnt
-								from
-									dds.h_user hu
-								join dds.l_order_user lou on
-									hu.h_user_pk = lou.h_user_pk
-								join dds.l_order_product lop on
-									lou.h_order_pk = lop.h_order_pk
-								join dds.h_product hp on
-									lop.h_product_pk = hp.h_product_pk
-								join dds.s_product_names spn on
-									hp.h_product_pk = spn.h_product_pk
-								group by 
-									hu.user_id,
-									hp.product_id,
-									spn.`name`
-								""",
-					)
-					data=cur.fetchall()			
-			return data
-			
+		
 	#вставка во вторую витрину			
 	def UserProductsWrite(self, user_id: int, product_id: int, product_name: str, order_cnt: int) -> None:
 			self._db = db
